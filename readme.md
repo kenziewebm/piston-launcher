@@ -3,11 +3,13 @@
 
 not endorsed by Mojang A.B B)
 
-not related in any way shape or form with Mojang AB B)
+not related in any way shape or form with Mojang A.B B)
 
 ### deps
 python
+
 `pip install toga`
+
 made to work on windows (should run on linux as well)
 
 ### todo
