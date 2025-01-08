@@ -13,10 +13,10 @@ python
 made to work on windows (should run on linux as well)
 
 ### todo
-- make it not crash in the middle of downloading
-- support DLCs (currently not supported because im too broke to buy any)
-- currently it just downloads the files and thats it
-- todo: everything
+- settings (game install dir, download threads, lzma memory usage)
+- support DLCs (probably wont be supported because im too broke to buy any)
+- support mods
+- ~~integrate into prismlauncher~~
 
 ### license
 MIT
