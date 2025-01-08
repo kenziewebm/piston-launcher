@@ -1,9 +1,12 @@
 import os
+import sys
 import toga
-import lzma as l # TODO: the game manifest has {"lzma":{"url":"whatever"}} for compressed files, have to either fix that or do this
 import hashlib
 import requests
 import threading
+import subprocess
+import lzma as l # TODO: the game manifest has {"lzma":{"url":"whatever"}} for compressed files, have to either fix that or do this
+from sys import executable
 from toga.style.pack import * 
 
 class PistonLauncher(toga.App):
@@ -14,8 +17,32 @@ class PistonLauncher(toga.App):
         :param box: Needed to update UI while installing.
         :param game_dir: Directory path to install the game to.
         """
+        with open(".game_dir", 'w') as f:
+            f.write(game_dir)
         install_thread = threading.Thread(target=self.install_game, args=(game_dir,))
+        self.loop.call_soon_threadsafe(self.set_dlbox_visibility, True)
         install_thread.start()
+        self.set_button_state(False)
+        self.set_button_text("Installing...")
+        
+    def launch_game(self, game_exec):
+        """
+        Launch Minecraft: Dungeons
+        :param game_exec: Path to game executable.
+        """
+        subprocess.Popen([game_exec])
+
+    def launch_wrapper(self):
+        """
+        Wrapper for launch_game()
+        :param game_dir: Directory path to the game files.
+        """
+        with open(".game_dir",'r') as f:
+            game_dir = f.read().strip()
+        game_exec = os.path.join(game_dir, "Dungeons.exe")
+        game_thread = threading.Thread(target=self.launch_game, args=(game_exec,), daemon=True)
+        game_thread.start()
+        
 
     def install_game(self, game_dir="F:\\games\\piston"):
         """
@@ -23,20 +50,29 @@ class PistonLauncher(toga.App):
         :param game_dir: Directory path to install the game to.
         """
         base_url = "https://piston-meta.mojang.com/v1/products/dungeons"
-        index_manifest = "/f4c685912beb55eb2d5c9e0713fe1195164bba27/windows-x64.json" # TODO: make not hardcoded
+        index_manifest = "/f4c685912beb55eb2d5c9e0713fe1195164bba27/windows-x64.json" # TODO: make not hardcoded. will be hard since the random string at
+                                                                                      # the beginning of each file is the hash of that file, and i haven't
+                                                                                      # found a manifest 1-level higher than this
         response = requests.get(base_url + index_manifest)
 
         if not os.path.exists(game_dir):
             os.mkdir(game_dir)
 
         game_manifest = response.json()["dungeons"][0]["manifest"]["url"] # bad!
-        response = requests.get(game_manifest)
+        game_version = response.json()["dungeons"][0]["version"]["name"] # bad!
 
-        print(len(response.json()["files"].keys()))
+        with open(os.path.join(game_dir, ".version"), 'w') as f: # the official launcher creates this file
+            f.write(game_version)
+
+        response = requests.get(game_manifest)
 
         self.loop.call_soon_threadsafe(self.set_max_progress, (len(response.json()["files"].keys())))
         self.process_json(response.json()["files"], game_dir) # bad!
         
+        self.loop.call_soon_threadsafe(self.set_button_state, True)
+        self.loop.call_soon_threadsafe(self.set_button_text, "Play")
+        self.loop.call_soon_threadsafe(self.set_button_action, lambda button: self.launch_wrapper())
+        self.loop.call_soon_threadsafe(self.set_dlbox_visibility, False)
 
     def process_json(self, json_data, base_path):
         """
@@ -45,36 +81,30 @@ class PistonLauncher(toga.App):
         :param base_path: The base directory to operate in.
         """
         for key, value in json_data.items():
-            print(f"{key}: {value}")
             if isinstance(value, dict):
                 item_type = value.get("type")
 
                 if item_type == "directory":
-                    # Create a directory
                     dir_path = os.path.join(base_path, key)
                     os.makedirs(dir_path, exist_ok=True)
                     print(f"MKDIR {dir_path}")
-                    self.update_progress()
+                    self.loop.call_soon_threadsafe(self.update_progress)
 
-                    # Recursively process its children
-                    self.process_json(json_data=value, base_path=base_path)
+                    self.process_json(json_data=value, base_path=base_path) # yay, recursion!
 
                 elif item_type == "file":
                     downloads = value.get("downloads", {})
                     lzma = downloads.get("lzma")
                     raw = downloads.get("raw")
 
-                    # Determine the URL and file size
                     download_info = lzma if lzma else raw
                     if download_info:
                         file_url = download_info.get("url")
                         file_sha1 = download_info.get("sha1")
                         file_path = os.path.join(base_path, key)
 
-                        # Download the file
                         self.download_file(file_url, file_path)
 
-                        # Verify the SHA1 checksum
                         if file_sha1:
                             print(f"SHA1 {file_path} ", end='')
                             if self.verify_sha1(file_path, file_sha1):
@@ -84,7 +114,6 @@ class PistonLauncher(toga.App):
                                 os.remove(file_path)
                                 continue
 
-                        # decompress if LZMA
                         if lzma:
                             print(f"LZMA {file_path} ", end='')
                             tmp_path = file_path + ".tmp"
@@ -99,9 +128,11 @@ class PistonLauncher(toga.App):
                             os.replace(tmp_path, file_path)
                             print("OK")
 
-                        #box.children[0].value = box.children[0].value + 1
                         self.loop.call_soon_threadsafe(self.update_progress)
 
+    # im pretty sure that theres a much smarter way to do this
+    # than making 5 billion tiny functions, but i cant come up
+    # with anything with anything better
 
     def update_progress(self):
         self.bar.value += 1
@@ -109,6 +140,20 @@ class PistonLauncher(toga.App):
 
     def set_max_progress(self, max):
         self.bar.max = max
+
+    def set_button_text(self, text):
+        self.button.text = text
+
+    def set_button_state(self, state):
+        self.button.enabled = state
+
+    def set_button_action(self, action):
+        self.button.on_press = action
+
+    def set_dlbox_visibility(self, state):
+        self.dlbox.style.visibility = HIDDEN if state is False else VISIBLE
+        self.bar.style.visibility = HIDDEN if state is False else VISIBLE
+        self.items.style.visibility = HIDDEN if state is False else VISIBLE
 
     def download_file(self, url, path):
         """
@@ -123,7 +168,6 @@ class PistonLauncher(toga.App):
             for chunk in response.iter_content(chunk_size=8192):
                 file.write(chunk)
         print("OK")
-
 
     def verify_sha1(self, file_path, expected_sha1):
         """
@@ -141,6 +185,8 @@ class PistonLauncher(toga.App):
     
     def startup(self):
 
+        self._impl.create_menus = lambda *x, **y: None # hide menubar
+
         box = toga.Box()
 
         self.main_window = toga.MainWindow()
@@ -148,29 +194,43 @@ class PistonLauncher(toga.App):
         self.main_window.show()
 
         label = toga.Label("Piston Launcher")
-        button = toga.Button("Install", on_press=lambda button: self.install_wrapper("F:\\games\\piston"))
-        dlbox = toga.Box()
+        self.button = toga.Button("Wait...", enabled=False)
+        self.dlbox = toga.Box()
         self.bar = toga.ProgressBar()
         self.items = toga.Label("")
 
         box.add(label)
-        box.add(button)
-        box.add(dlbox)
+        box.add(self.button)
+        box.add(self.dlbox)
 
-        dlbox.add(self.bar)
-        dlbox.add(self.items)
+        self.dlbox.add(self.bar)
+        self.dlbox.add(self.items)
 
-        # we got CSS in Python before GTA 6
-        label.style.font_size = 26
-        label.style.text_align = CENTER
-        button.style.width = 64
-        button.style.padding = 5
+        self.bar.style.visibility = HIDDEN
+        self.dlbox.style.visiblity = HIDDEN
+        self.items.style.visibility = HIDDEN
+
         box.style.direction = COLUMN
         box.style.alignment = CENTER
-        dlbox.style.direction = ROW
-        dlbox.style.alignment = CENTER
-        self.items.style.padding = 5
+        label.style.text_align = CENTER
+        self.dlbox.style.direction = ROW
+        self.dlbox.style.alignment = CENTER
+        
+        label.style.font_size = 26
         self.bar.style.width = 150
+        self.button.style.width = 64
+        self.items.style.padding = 5
+        self.button.style.padding = 5
+
+        if os.path.exists(".game_dir"):
+            self.button.on_press = lambda button: self.launch_wrapper()
+            self.button.text = "Play"
+            self.button.enabled = True
+        else:
+            self.dlbox.style.visibility = VISIBLE
+            self.button.on_press = lambda button: self.install_wrapper("F:\\games\\piston") # TODO: un-hardcode path before release
+            self.button.text = "Install"
+            self.button.enabled = True
 
 if __name__ == '__main__':
     app = PistonLauncher(formal_name="Piston Launcher", app_id="xyz.kenziewebm.piston-launcher")
